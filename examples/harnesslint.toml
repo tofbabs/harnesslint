@@ -1,0 +1,94 @@
+# harnesslint — an annotated example. Copy it to your repo root as
+# `harnesslint.toml`, or run `harnesslint init` to get a shorter starting point.
+#
+# Every key below overrides a built-in default, and every one is optional:
+# deleting this file is valid, and the tool runs on its defaults. Config is
+# layered — built-in defaults, then the runner profile, then this file — so a
+# value set here always wins.
+#
+# Keep here only what YOU decided differently, and say why. The reason is the
+# part that ages well; the value alone becomes a number nobody dares change.
+
+[runner]
+# Which agent runner this repo uses. Omitted, it is detected from the tree.
+# `harnesslint profiles` shows the options and which one you are getting.
+#
+# Pin it once the answer matters. Detection is deterministic, but it reads the
+# tree — adding a `.claude/` directory to an AGENTS.md repo would move you to a
+# different profile, and a different profile measures different files. The
+# baseline records the profile and `check` rejects a mismatch, so this shows up
+# as a warning rather than a silent reset, but pinning avoids the surprise.
+profile = "claude-code"
+
+[paths]
+# The profile already sets these. Override only what your repo does
+# differently — a second home for commands, an extra directory to exclude.
+# commands = [".claude/commands/**/*.md", "tools/commands/**/*.md"]
+# exclude  = ["**/node_modules/**", "**/.git/**", "**/vendor/**", "**/fixtures/**"]
+
+[budget]
+# What the harness costs on EVERY turn: root memory plus every artifact's
+# `description:`. Bodies are NOT counted — they load on invocation, so a long
+# careful procedure is cheap and a long description is not.
+#
+# Measure before you set this. A ceiling should be generous enough that its job
+# is catching a slide rather than being tight today; if it trips, the fix is a
+# scoped instruction file (loaded on contact), not deleting a rule.
+always_loaded_tokens = 24000
+memory_file_tokens = 12000
+
+# chars/token. A deliberate approximation, not a tokenizer — the number's job is
+# to be compared against its own previous value. Raise it if your harness is
+# mostly prose, lower it if it is mostly code or identifiers.
+# chars_per_token = 4
+
+[redundancy]
+# How long a sentence has to be before appearing verbatim in two files counts as
+# a restated rule rather than shared boilerplate. Lower flags shared headings;
+# higher misses real duplication. Tune it against your own harness.
+min_words = 9
+
+[executability]
+# CLIs a harness may assume without declaring — POSIX tools any environment
+# running this repo already has.
+assumed_clis = [
+  "git", "python3", "python", "bash", "sh", "echo", "cd",
+  "grep", "sed", "awk", "cat", "head", "tail", "sort", "uniq", "wc",
+  "jq", "pytest", "ruff", "pip",
+]
+
+# Declared, NOT assumed — and that distinction is the whole point of this list.
+# The objection is never to depending on a CLI; it is to depending on one
+# silently, so that a missing binary is discovered halfway through a task rather
+# than stated up front.
+#
+# Write down what each one degrades to. That note is what turns a dependency
+# into a precondition every command can be written to handle:
+#   gh      -> the mcp__github__* tools, where they are available
+#   kubectl -> hand to the operator; there is no substitute
+declared_clis = ["gh", "kubectl"]
+
+# `bash -n` on shell hooks. Off by default: a verdict that depends on whether
+# bash is installed is not reproducible, which is the one property this tool
+# cannot trade away. Turn it on where bash is guaranteed — CI, a devcontainer.
+# When off, the fact that shell hooks went unchecked is reported, not hidden.
+# shell_syntax_check = true
+
+# "auto" skips the executable-bit check where the filesystem cannot carry one
+# (Windows checkouts, core.fileMode=false, zip exports) rather than reporting
+# every hook as broken. "on" and "off" force the question.
+# exec_bit_check = "auto"
+
+[severities]
+# Promote or demote a rule. Demote when a rule genuinely does not apply to your
+# repo; promote when a finding is worse for you than the default assumes.
+#
+# Example: board moves have no fallback in a cloud session (Projects v2 is
+# GraphQL-only), so a command that forgets to degrade is an error here rather
+# than a warning. See rules/board_and_org.py.
+"project/board-move-no-fallback" = "error"
+
+# Prefer the baseline over `ignore`. A baselined finding still prints in
+# `report`, so it stays visible and countable; an ignored one never prints at
+# all. You almost always want to know if a category grows.
+# ignore = ["redundancy/duplicate-rule:.claude/commands/legacy.md"]

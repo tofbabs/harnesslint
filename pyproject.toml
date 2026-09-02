@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "harnesslint"
+# Single source of truth is `__version__` in harnesslint.py, so a vendored
+# copy of that one file carries its own version too.
+dynamic = ["version"]
+description = "Measure drift in an agent harness, deterministically, and gate CI on regression."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Kodobe" }]
+keywords = ["agent", "llm", "claude-code", "linter", "context-engineering", "ci"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Quality Assurance",
+]
+
+# No runtime dependencies, on purpose. This tool exists to be trustworthy when
+# the project it is measuring is broken — including when that project's
+# dependencies are what is broken. `tomllib` is stdlib from 3.11, which is why
+# that is the floor.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/kodobe/harnesslint"
+Issues = "https://github.com/kodobe/harnesslint/issues"
+
+[project.scripts]
+harnesslint = "harnesslint:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff==0.15.15"]
+
+[tool.hatch.version]
+path = "harnesslint.py"
+
+[tool.hatch.build.targets.wheel]
+# A single module, not a package — so `curl`-ing this one file into a repo and
+# running `python3 harnesslint.py` stays exactly as valid as installing it.
+# Losing that would cost the tool its main adoption path.
+only-include = ["harnesslint.py"]
+sources = ["."]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "harnesslint.py",
+  "tests/",
+  "examples/",
+  "README.md",
+  "ROADMAP.md",
+  "LICENSE",
+  "CHANGELOG.md",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
