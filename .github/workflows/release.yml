@@ -1,0 +1,64 @@
+name: release
+
+# Tag-triggered. The version comes from `__version__` in harnesslint.py, so the
+# tag and the artifact cannot disagree — `verify` fails the run if they do.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install build
+      - run: python -m build
+      - name: The tag must match __version__
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          module="$(python -c 'import re,pathlib;print(re.search(r"__version__ = \"([^\"]+)\"", pathlib.Path("harnesslint.py").read_text()).group(1))')"
+          if [ "$tag" != "$module" ]; then
+            echo "tag $tag does not match __version__ $module" >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  smoke:
+    # Install the built wheel the way a user would and run the console script.
+    # The test suite only ever exercises the source-tree file, so without this
+    # a broken entry point would ship.
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: dist }
+      - run: pip install dist/*.whl
+      - run: harnesslint --version
+      - run: harnesslint profiles
+      - run: harnesslint report
+
+  publish:
+    needs: smoke
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # Trusted Publishing — no API token in secrets
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: dist }
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the floor (tomllib). Testing the ceiling too, because a tool
+        # that people vendor into arbitrary repos meets arbitrary interpreters —
+        # and because finding messages must not vary across them.
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pytest -q
+
+  dogfood:
+    # Run the tool on itself. It has no harness of its own, so this asserts the
+    # portability floor: a repo with nothing to measure must report nothing and
+    # exit 0 rather than crash.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: python3 harnesslint.py report
+      - run: python3 harnesslint.py check --format github
+
+  wheel:
+    # Install the built wheel and run the console script. The suite imports the
+    # source-tree file directly, so the packaged entry point is otherwise
+    # untested until someone pip-installs a release.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install build
+      - run: python -m build
+      - run: pip install dist/*.whl
+      - run: harnesslint --version
+      - run: harnesslint profiles
+      - run: harnesslint report
