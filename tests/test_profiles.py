@@ -6,7 +6,7 @@ Two things have to hold at once, and they pull in opposite directions:
     The refactor is only safe if it changed nothing for the harness the tool was
     built against, and `TestClaudeCodeRegressionLock` is the evidence rather
     than the claim.
-  * A repo on any other runner must get an honest answer instead of six
+  * A repo on any other runner must get an honest answer instead of seven
     dimensions quietly measuring globs that match nothing. A profile that checks
     almost nothing has to say which dimensions it cannot speak to, or a short
     report reads as a clean harness.
@@ -92,6 +92,12 @@ class TestClaudeCodeRegressionLock:
     The expected set below was captured from the pre-profile implementation. It
     is deliberately spelled out rather than computed, so that a future change to
     the profile cannot quietly move the goalposts and still pass.
+
+    The set grew by exactly one entry when `placement` shipped:
+    `placement/skill-without-steps` on `.claude/skills/demo/SKILL.md`. That is
+    a genuinely earned finding, not drift — the fixture's skill body is `B.`,
+    which states no steps, so a dimension that measures placement is right to
+    name it.
     """
 
     EXPECTED = {
@@ -103,6 +109,7 @@ class TestClaudeCodeRegressionLock:
         ("completeness/hook-missing", ".claude/settings.json"),
         ("completeness/skill-description", ".claude/skills/demo/SKILL.md"),
         ("executability/undeclared-cli", ".claude/commands/a.md"),
+        ("placement/skill-without-steps", ".claude/skills/demo/SKILL.md"),
         ("redundancy/duplicate-rule", ".claude/commands/a.md"),
         ("references/broken-link", "CLAUDE.md"),
     }
@@ -221,4 +228,4 @@ class TestProfilesCommand:
     def test_states_what_each_profile_cannot_measure(self, tmp_path: Path) -> None:
         proc = _cli(tmp_path, "profiles")
         assert "not measured:" in proc.stdout
-        assert "all six apply" in proc.stdout
+        assert "all seven apply" in proc.stdout

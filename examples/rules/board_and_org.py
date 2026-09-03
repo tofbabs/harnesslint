@@ -3,7 +3,7 @@ A REAL project rule file, kept verbatim from the repo harnesslint was
 extracted from. Copy it as a shape, not as content — every assertion here
 is specific to that project.
 
-The six built-in dimensions are what generalises across harnesses. These are
+The seven built-in dimensions are what generalises across harnesses. These are
 this repo's own conventions, each one recording a defect that actually shipped:
 
   * A hardcoded GitHub Projects option id. Board #6's Status field was

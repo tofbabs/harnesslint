@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.3.0 — 2026-09-03
+
+A seventh dimension: `placement`. The other six each ask a question about one artifact
+in isolation; `placement` asks the question that comes first in practice — is this
+piece of guidance living in the primitive whose job it is (project instructions file,
+scoped rules, skills, subagents, hooks)? Misplacement is the same fail-open shape the
+tool was extracted to catch, one level up: a procedure in `CLAUDE.md` paid for on every
+turn and read closely on none, a skill that only applies when someone thinks to invoke
+it, a scoped file over a directory that no longer holds anything, a hook registered on a
+misspelled event that never fires and never says so.
+
+**Ten new rules**, hard-mechanical only — no prose matching, nothing that requires
+reading intent:
+
+- `placement/no-instruction-file` (error) — harness artifacts exist but no root-level
+  instruction file.
+- `placement/procedure-in-memory` (warn) — a root memory doc has a run of
+  `max_memory_steps` or more consecutive ordered-list items, counted outside fenced
+  code. `budget/memory-file` already owns file size; this does not restate it.
+- `placement/scope-matches-nothing` (error) — a scoped instruction file whose directory
+  contains nothing but instruction files.
+- `placement/scope-not-declared` (warn) — the profile declares a `scope_key` and the
+  doc's frontmatter lacks it. Inert under every profile shipped today.
+- `placement/skill-without-steps` (warn) — a skill body with zero ordered-list items and
+  no `## Step` headings. The mirror of `procedure-in-memory`.
+- `placement/agent-tool-unknown` (error) — a name in an agent's `tools:` the profile
+  does not know, is not an MCP name, and is not in `placement.extra_tools`.
+- `placement/agent-body-oversized` (warn) — agent body over `max_agent_tokens`
+  estimated tokens. `authority/agent-inherits-all` already owns the bounded-exploration
+  half of the subagent definition; this does not restate it.
+- `placement/hook-unknown-event` (error) — a key under the settings hooks root that is
+  not one of the profile's known hook events.
+- `placement/no-hooks-registered` (info) — a settings file parses, the profile knows
+  about hooks, and zero are registered. A fact, not a failure.
+- `placement/primitives-unavailable` (info) — names the primitives the active profile
+  has no concept of, the same discipline as `executability/shell-syntax-unchecked` and
+  `executability/exec-bit-unverifiable`: a short placement report under a thin profile
+  must not read as a clean one. `placement` is not in `inert_dimensions` for any
+  shipping profile — the memory rules apply regardless of profile, so the dimension is
+  always at least partially measured.
+
+Three rules that would need prose matching or reading intent were considered and not
+shipped: an obligation stated in prose that no hook enforces, a subagent with no return
+contract, and a rule in the root instructions file that ought to be scoped. See the
+README's design notes for why each fails the hard-mechanical bar.
+
+**New `Profile` fields**, all empty by default so every existing profile stays valid:
+`known_tools`, `hook_events`, `scope_key`. All three can be overridden per-project under
+`[runner]`, the same as `profile` itself.
+
+**New `[placement]` config block**: `max_memory_steps` (default 6), `max_agent_tokens`
+(default 1500), `extra_tools` (default `[]`, for plugin-provided tools a profile's
+`known_tools` cannot know about), and `instruction_file_names` (what counts as an
+instruction file, not content, for `scope-matches-nothing`).
+
+**What newly gets measured.** The skills glob widens from `.claude/skills/*/SKILL.md`
+to `.claude/skills/**/SKILL.md`. A nested skill previously received zero checks and
+reported clean — the exact failure mode this tool exists to name. Existing repos with
+nested skills will see new findings on this upgrade; that is the ratchet working, not a
+regression to chase down by hand — baseline it like any other newly-measured surface.
+
+**`init --scaffold`.** `init` now always writes `.harnesslint/PRIMITIVES.md`, describing
+the five primitives and which placement rule speaks to each. A new `--scaffold` flag
+additionally writes, only where absent: a root instructions stub, an example skill with
+numbered steps, a nested scoped-instructions example, and a settings hook stub.
+Opt-in — writing into someone's `.claude/` uninvited is not a linter's business — and
+`init` still never overwrites.
+
+`RULESET_VERSION` stays at **2**. Every placement rule is new, and adding rules does not
+bump it; the skills-glob widening changes coverage, not the meaning of any existing rule
+id.
+
 ## 0.2.0 — 2026-09-02
 
 Agnostic, deterministic, installable. No new dimensions; the six are unchanged.

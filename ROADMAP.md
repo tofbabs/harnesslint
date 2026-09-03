@@ -21,7 +21,7 @@ regulates the thing doing the regulating. Böckeler names the gap it aims at dir
 > there's real potential for tooling that helps configure, sync, and reason about them
 > as a system.
 
-Getting from "six checks on some markdown" to that is what the versions below are for.
+Getting from "seven checks on some markdown" to that is what the versions below are for.
 
 ## Released
 
@@ -42,9 +42,37 @@ gate adoptable on day one.
   Python, any hash seed. Three leaks are closed; see the CHANGELOG.
 - **PyPI**, published from a tag via Trusted Publishing.
 
+### 0.3 — placement
+
+A seventh dimension, `placement`, asking the question the other six do not: is each
+piece of guidance living in the primitive whose job it is — project instructions file,
+scoped rules, skills, subagents, hooks? The same fail-open shape the tool was extracted
+to catch, one level up: a procedure in `CLAUDE.md` paid for on every turn and read
+closely on none, a skill that is really a rule and only applies when invoked, a scoped
+file over a directory that no longer holds anything, a hook registered on a misspelled
+event that never fires and never says so.
+
+- Ten rules across the five primitives, `placement/no-instruction-file` through
+  `placement/primitives-unavailable` — see the README for the full list.
+- Three new empty-by-default `Profile` fields (`known_tools`, `hook_events`,
+  `scope_key`) so the dimension is data-driven per runner, the same discipline 0.2
+  applied to the other six.
+- Hard-mechanical only: no prose matching, nothing that requires reading intent. Three
+  rules that would need that — an unenforced prose obligation, a subagent with no
+  return contract, a root-file rule that ought to be scoped — were scoped out rather
+  than shipped as guesses. See the README's design notes.
+- `.claude/skills/**/SKILL.md` replaces `.claude/skills/*/SKILL.md` as the skills glob:
+  a nested skill went entirely unchecked before this. This surfaces new findings on
+  existing trees, which is what the ratchet is for.
+- `init` now writes `.harnesslint/PRIMITIVES.md`, the taxonomy the dimension measures
+  against, and gains `--scaffold` to stub the primitives themselves. Opt-in, and it
+  still never overwrites.
+- `RULESET_VERSION` stays at 2 — every placement rule is new, and new rules land as
+  findings rather than changing what an existing rule id asserts.
+
 ## Planned
 
-### 0.3 — signals optimised for agent consumption
+### 0.4 — signals optimised for agent consumption
 
 Böckeler's sharpest practical point is that a sensor is only as good as the signal it
 emits: sensors are "particularly powerful when they produce signals that are optimised
@@ -59,19 +87,24 @@ self-correction." Today `harnesslint` writes for a human reading CI logs.
 - Per-rule `explain`. Today `explain budget/always-loaded` prints the dimension's
   docstring, so all four `budget/*` rules explain identically.
 
-### 0.4 — coherence
+### 0.5 — coherence
 
 Her open question, and the one a checker is actually well placed to answer:
 
 > How do we keep a harness coherent as it grows, with guides and sensors in sync, not
 > contradicting each other?
 
-A seventh dimension, `coherence`: two instructions that contradict each other across
+An eighth dimension, `coherence`: two instructions that contradict each other across
 files; a guide that describes a sensor which is not wired up; a hook registered for an
 event nothing documents; a command that references a workflow step that no longer
 exists. Plus `harnesslint diff`, scoping a report to what a PR changed.
 
-### 0.5 — the guide/sensor inventory
+The boundary against 0.3's `placement` is exact, not incidental: **placement asks
+whether guidance is in the right kind of file; coherence asks whether two pieces of
+guidance agree.** A rule that is correctly placed can still contradict another rule
+that is also correctly placed — that is coherence's problem, not placement's.
+
+### 0.6 — the guide/sensor inventory
 
 A harness with guides but no sensors produces "an agent that encodes rules but never
 finds out whether they worked." A harness with sensors but no guides produces "an agent
@@ -83,7 +116,7 @@ direction (feedforward/feedback) and execution (computational/inferential), and 
 the balance. This is the "reason about them as a system" half of the quote above, and
 the point at which the tool stops being a markdown linter.
 
-### 0.6 — more profiles, and harness templates
+### 0.7 — more profiles, and harness templates
 
 `cursor`, `github-copilot`, `gemini-cli`, `opencode`. `init --profile`. Profiles
 contributable as data-only pull requests, with a documented schema, so supporting a

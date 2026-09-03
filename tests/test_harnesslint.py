@@ -1,5 +1,5 @@
 """
-tests/test_harnesslint.py — regression for the six built-in dimensions.
+tests/test_harnesslint.py — regression for the seven built-in dimensions.
 
 The tool's only job is to be trusted. Two properties carry that, and both are
 easy to lose silently:
@@ -30,15 +30,35 @@ import harnesslint as hl  # noqa: E402
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────
-def build_harness(root: Path, *, commands=None, agents=None, memory=None, settings=None) -> Path:
-    """Write a synthetic harness and return its root."""
+def build_harness(
+    root: Path,
+    *,
+    commands=None,
+    agents=None,
+    memory=None,
+    settings=None,
+    skills=None,
+    no_memory=False,
+) -> Path:
+    """Write a synthetic harness and return its root.
+
+    `skills` maps a path relative to `.claude/skills/` (e.g. `"demo/SKILL.md"`
+    or a nested `"group/nested/SKILL.md"`) to its content. `no_memory` skips
+    writing a root `CLAUDE.md` entirely, for fixtures that need to be caught
+    without one.
+    """
     (root / ".claude" / "commands").mkdir(parents=True, exist_ok=True)
     (root / ".claude" / "agents").mkdir(parents=True, exist_ok=True)
-    (root / "CLAUDE.md").write_text(memory or "# Project\n\nA rule.\n")
+    if not no_memory:
+        (root / "CLAUDE.md").write_text(memory or "# Project\n\nA rule.\n")
     for name, text in (commands or {}).items():
         (root / ".claude" / "commands" / name).write_text(text)
     for name, text in (agents or {}).items():
         (root / ".claude" / "agents" / name).write_text(text)
+    for rel, text in (skills or {}).items():
+        path = root / ".claude" / "skills" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
     if settings is not None:
         (root / ".claude" / "settings.json").write_text(json.dumps(settings, indent=2))
     return root
@@ -310,6 +330,257 @@ class TestRedundancy:
             },
         )
         assert "redundancy/duplicate-rule" not in rules(tmp_path)
+
+
+class TestPlacement:
+    """Is each piece of guidance living in the primitive whose job it is?
+
+    Five primitives — instructions file, scoped rules, skills, subagents,
+    hooks — and each has one job. Misplacement is the same fail-open shape as
+    every other dimension here: a procedure stuffed into the always-loaded file
+    is paid for on every turn and read closely on none, a skill with no steps
+    applies only when someone thinks to invoke a rule, a scoped file over an
+    empty directory stopped applying without saying so, a hook on a misspelled
+    event never fires and never complains. Ten rules, and every one of them is
+    a markdown structure check, a filesystem fact, or a key lookup — nothing
+    here reads intent out of prose. As with the rest of the suite, most of what
+    follows is a false-positive guard: the positive case proves the rule can
+    fire, the guard proves it does not fire on the tree that looks similar but
+    is actually fine.
+    """
+
+    # ── no-instruction-file ─────────────────────────────────────────────
+    def test_artifacts_without_a_root_instruction_file_are_reported(self, tmp_path: Path) -> None:
+        build_harness(
+            tmp_path,
+            no_memory=True,
+            commands={"a.md": "---\ndescription: A\n---\n\nBody.\n"},
+        )
+        assert "placement/no-instruction-file" in rules(tmp_path)
+
+    def test_a_root_instruction_file_is_clean(self, tmp_path: Path) -> None:
+        build_harness(tmp_path, commands={"a.md": "---\ndescription: A\n---\n\nBody.\n"})
+        assert "placement/no-instruction-file" not in rules(tmp_path)
+
+    def test_a_tree_with_no_harness_artifacts_at_all_is_clean(self, tmp_path: Path) -> None:
+        assert "placement/no-instruction-file" not in rules(tmp_path)
+
+    # ── procedure-in-memory ─────────────────────────────────────────────
+    def test_six_consecutive_steps_in_root_memory_is_reported(self, tmp_path: Path) -> None:
+        steps = "\n".join(f"{i}. step {i}" for i in range(1, 7))
+        build_harness(tmp_path, memory=f"# Project\n\n{steps}\n")
+        assert "placement/procedure-in-memory" in rules(tmp_path)
+
+    def test_five_consecutive_steps_is_under_the_boundary(self, tmp_path: Path) -> None:
+        steps = "\n".join(f"{i}. step {i}" for i in range(1, 6))
+        build_harness(tmp_path, memory=f"# Project\n\n{steps}\n")
+        assert "placement/procedure-in-memory" not in rules(tmp_path)
+
+    def test_a_numbered_list_inside_a_fenced_block_is_not_a_procedure(self, tmp_path: Path) -> None:
+        """Showing a procedure in an example is not stating one."""
+        steps = "\n".join(f"{i}. echo step {i}" for i in range(1, 7))
+        build_harness(tmp_path, memory=f"# Project\n\n```bash\n{steps}\n```\n")
+        assert "placement/procedure-in-memory" not in rules(tmp_path)
+
+    # ── scope-matches-nothing ───────────────────────────────────────────
+    def test_scoped_memory_over_a_directory_with_nothing_else_is_reported(
+        self, tmp_path: Path
+    ) -> None:
+        build_harness(tmp_path)
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "CLAUDE.md").write_text("# Docs\n\nA scoped rule.\n")
+        assert "placement/scope-matches-nothing" in rules(tmp_path)
+
+    def test_scoped_memory_beside_real_source_files_is_clean(self, tmp_path: Path) -> None:
+        build_harness(tmp_path)
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "CLAUDE.md").write_text("# Docs\n\nA scoped rule.\n")
+        (tmp_path / "docs" / "guide.py").write_text("pass\n")
+        assert "placement/scope-matches-nothing" not in rules(tmp_path)
+
+    def test_scoped_memory_over_a_directory_holding_only_a_subdirectory_is_clean(
+        self, tmp_path: Path
+    ) -> None:
+        """A subdirectory counts as governed even with nothing directly inside."""
+        build_harness(tmp_path)
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "CLAUDE.md").write_text("# Docs\n\nA scoped rule.\n")
+        (tmp_path / "docs" / "sub").mkdir()
+        (tmp_path / "docs" / "sub" / "guide.py").write_text("pass\n")
+        assert "placement/scope-matches-nothing" not in rules(tmp_path)
+
+    # ── scope-not-declared ──────────────────────────────────────────────
+    def test_scope_key_required_by_the_runner_but_missing_is_reported(self, tmp_path: Path) -> None:
+        build_harness(tmp_path, no_memory=True)
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "CLAUDE.md").write_text("# Docs\n\nA scoped rule.\n")
+        (tmp_path / "docs" / "guide.py").write_text("pass\n")
+        (tmp_path / "harnesslint.toml").write_text('[runner]\nscope_key = "globs"\n')
+        assert "placement/scope-not-declared" in rules(tmp_path)
+
+    def test_a_declared_scope_key_is_clean(self, tmp_path: Path) -> None:
+        build_harness(tmp_path, no_memory=True)
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "CLAUDE.md").write_text(
+            "---\nglobs: docs/**\n---\n\n# Docs\n\nA scoped rule.\n"
+        )
+        (tmp_path / "docs" / "guide.py").write_text("pass\n")
+        (tmp_path / "harnesslint.toml").write_text('[runner]\nscope_key = "globs"\n')
+        assert "placement/scope-not-declared" not in rules(tmp_path)
+
+    def test_scope_not_declared_is_inert_under_the_stock_claude_code_profile(
+        self, tmp_path: Path
+    ) -> None:
+        """claude-code declares scope by directory placement, not frontmatter —
+        `scope_key` is empty, so this rule has nothing to check."""
+        build_harness(tmp_path, no_memory=True)
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "CLAUDE.md").write_text("# Docs\n\nA scoped rule.\n")
+        (tmp_path / "docs" / "guide.py").write_text("pass\n")
+        assert "placement/scope-not-declared" not in rules(tmp_path)
+
+    # ── skill-without-steps ─────────────────────────────────────────────
+    def test_a_skill_with_prose_only_is_reported(self, tmp_path: Path) -> None:
+        build_harness(
+            tmp_path,
+            skills={"demo/SKILL.md": "---\ndescription: d\n---\n\nJust prose, no procedure.\n"},
+        )
+        assert "placement/skill-without-steps" in rules(tmp_path)
+
+    def test_a_skill_with_step_headings_is_clean(self, tmp_path: Path) -> None:
+        build_harness(
+            tmp_path,
+            skills={
+                "demo/SKILL.md": "---\ndescription: d\n---\n\n"
+                "## Step 1\n\nDo the thing.\n\n## Step 2\n\nDo the next thing.\n"
+            },
+        )
+        assert "placement/skill-without-steps" not in rules(tmp_path)
+
+    def test_a_skill_with_an_ordered_list_is_clean(self, tmp_path: Path) -> None:
+        build_harness(
+            tmp_path,
+            skills={"demo/SKILL.md": "---\ndescription: d\n---\n\n1. Do the thing.\n2. Done.\n"},
+        )
+        assert "placement/skill-without-steps" not in rules(tmp_path)
+
+    def test_a_nested_skill_is_discovered_under_the_widened_glob(self, tmp_path: Path) -> None:
+        """`.claude/skills/*/SKILL.md` widened to `**/SKILL.md` this release —
+        before that, a nested skill got zero checks and reported clean, which
+        is exactly the failure mode this tool exists to name."""
+        build_harness(
+            tmp_path,
+            skills={"group/nested/SKILL.md": "---\ndescription: d\n---\n\nJust prose.\n"},
+        )
+        got = [f for f in findings(tmp_path) if f.path == ".claude/skills/group/nested/SKILL.md"]
+        assert got and got[0].rule == "placement/skill-without-steps"
+
+    # ── agent-tool-unknown ───────────────────────────────────────────────
+    def test_a_typoed_tool_grant_is_reported(self, tmp_path: Path) -> None:
+        build_harness(
+            tmp_path,
+            agents={"a.md": "---\nname: a\ndescription: d\ntools: Wrte\n---\n\nBody.\n"},
+        )
+        assert "placement/agent-tool-unknown" in rules(tmp_path)
+
+    def test_an_mcp_tool_grant_is_not_treated_as_unknown(self, tmp_path: Path) -> None:
+        build_harness(
+            tmp_path,
+            agents={
+                "a.md": "---\nname: a\ndescription: d\n"
+                "tools: mcp__github__create_pull_request\n---\n\nBody.\n"
+            },
+        )
+        assert "placement/agent-tool-unknown" not in rules(tmp_path)
+
+    def test_an_extra_tool_declared_in_config_is_not_unknown(self, tmp_path: Path) -> None:
+        build_harness(
+            tmp_path,
+            agents={"a.md": "---\nname: a\ndescription: d\ntools: MyCustomTool\n---\n\nBody.\n"},
+        )
+        (tmp_path / "harnesslint.toml").write_text('[placement]\nextra_tools = ["MyCustomTool"]\n')
+        assert "placement/agent-tool-unknown" not in rules(tmp_path)
+
+    def test_legitimate_known_tools_are_clean(self, tmp_path: Path) -> None:
+        build_harness(
+            tmp_path,
+            agents={"a.md": "---\nname: a\ndescription: d\ntools: Read, Grep\n---\n\nBody.\n"},
+        )
+        assert "placement/agent-tool-unknown" not in rules(tmp_path)
+
+    # ── agent-body-oversized ────────────────────────────────────────────
+    def test_an_agent_body_over_the_configured_budget_is_reported(self, tmp_path: Path) -> None:
+        build_harness(
+            tmp_path,
+            agents={
+                "a.md": "---\nname: a\ndescription: d\n---\n\n"
+                "This body is a good deal longer than the tiny budget below.\n"
+            },
+        )
+        (tmp_path / "harnesslint.toml").write_text("[placement]\nmax_agent_tokens = 10\n")
+        assert "placement/agent-body-oversized" in rules(tmp_path)
+
+    def test_a_short_agent_body_is_clean(self, tmp_path: Path) -> None:
+        build_harness(tmp_path, agents={"a.md": "---\nname: a\ndescription: d\n---\n\nBody.\n"})
+        assert "placement/agent-body-oversized" not in rules(tmp_path)
+
+    # ── hook-unknown-event ──────────────────────────────────────────────
+    def test_an_unknown_hook_event_is_reported(self, tmp_path: Path) -> None:
+        build_harness(tmp_path, settings={"hooks": {"PreToolUze": []}})
+        assert "placement/hook-unknown-event" in rules(tmp_path)
+
+    def test_every_real_hook_event_is_clean(self, tmp_path: Path) -> None:
+        events = hl.PROFILES["claude-code"].hook_events
+        build_harness(tmp_path, settings={"hooks": {name: [] for name in events}})
+        assert "placement/hook-unknown-event" not in rules(tmp_path)
+
+    # ── no-hooks-registered ──────────────────────────────────────────────
+    def test_an_empty_hooks_block_is_reported(self, tmp_path: Path) -> None:
+        build_harness(tmp_path, settings={"hooks": {}})
+        assert "placement/no-hooks-registered" in rules(tmp_path)
+
+    def test_one_registered_hook_is_clean(self, tmp_path: Path) -> None:
+        build_harness(
+            tmp_path,
+            settings={
+                "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "echo hi"}]}]}
+            },
+        )
+        assert "placement/no-hooks-registered" not in rules(tmp_path)
+
+    def test_no_settings_file_at_all_is_clean(self, tmp_path: Path) -> None:
+        """A runner that was never configured has nothing to report here."""
+        build_harness(tmp_path)
+        assert "placement/no-hooks-registered" not in rules(tmp_path)
+        assert "placement/hook-unknown-event" not in rules(tmp_path)
+
+    # ── primitives-unavailable ──────────────────────────────────────────
+    def test_agents_md_reports_the_primitives_it_has_no_concept_of(self, tmp_path: Path) -> None:
+        (tmp_path / "AGENTS.md").write_text("# Root\n\nA rule.\n")
+        assert "placement/primitives-unavailable" in rules(tmp_path)
+
+    def test_claude_code_has_all_five_primitives_and_does_not_fire(self, tmp_path: Path) -> None:
+        build_harness(tmp_path)
+        assert "placement/primitives-unavailable" not in rules(tmp_path)
+
+    # ── partial measurement under a thinner profile ─────────────────────
+    def test_placement_is_partially_measured_under_agents_md(self, tmp_path: Path) -> None:
+        """agents-md has no agents, skills, or hooks, so those rule families
+        cannot speak — but the memory rules still can, and the gap itself is
+        reported. Partial measurement, not silence."""
+        steps = "\n".join(f"{i}. step {i}" for i in range(1, 7))
+        (tmp_path / "AGENTS.md").write_text(f"# Root\n\n{steps}\n")
+        got = rules(tmp_path)
+        assert "placement/primitives-unavailable" in got
+        assert "placement/procedure-in-memory" in got
+        for absent in (
+            "placement/agent-tool-unknown",
+            "placement/agent-body-oversized",
+            "placement/skill-without-steps",
+            "placement/hook-unknown-event",
+            "placement/no-hooks-registered",
+        ):
+            assert absent not in got
 
 
 # ── the ratchet ───────────────────────────────────────────────────────────

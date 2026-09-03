@@ -23,19 +23,20 @@ None was visible until someone read every harness file at once. That is a job
 for a checker, and it is the one thing a checker is reliably better at than a
 person.
 
-So: measure a harness across six dimensions, print the state, and compare it
+So: measure a harness across seven dimensions, print the state, and compare it
 against a committed baseline so CI fails on *regression* rather than on absolute
 perfection. That distinction is what makes it adoptable — a messy harness
 ratchets toward clean instead of blocking every PR on day one.
 
-Six dimensions, and what each is really asking:
+Seven dimensions, and what each is really asking:
 
   budget         What does this harness cost on EVERY turn, before any work?
   redundancy     Is any rule stated twice, where one copy can drift?
   references     Does every path and link the harness cites actually exist?
   completeness   Is every artifact fully declared, or partly configured?
   authority      Does anything hold more power than its own description claims?
-  executability   Can the commands actually run in the environment they target?
+  executability  Can the commands actually run in the environment they target?
+  placement      Is each piece of guidance in the primitive whose job it is?
 
 Determinism is the whole point, and it is a contract rather than an aspiration:
 
@@ -63,6 +64,7 @@ copying this single file into a repo and running it. Config is optional; the
 defaults are the opinions.
 
     harnesslint init            # scaffold a config, a rules dir, a CI snippet
+    harnesslint init --scaffold # also stub out the primitives themselves
     harnesslint report          # every finding, never fails the build
     harnesslint baseline        # accept the current state as the ratchet
     harnesslint check           # compare to the baseline (this is what CI runs)
@@ -94,7 +96,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 RULESET_VERSION = 2
 """Bumped when a rule's *meaning* changes, so a stale baseline is detectable.
@@ -123,7 +125,7 @@ _SEVERITY_ORDER = {ERROR: 0, WARN: 1, INFO: 2}
 # A profile is everything one agent runner does differently: where its files
 # live, what it calls its tools, how its settings are shaped, which sigil means
 # "arguments". Keeping it here rather than inside the checks is what makes the
-# six dimensions genuinely runner-agnostic instead of only claiming to be —
+# seven dimensions genuinely runner-agnostic instead of only claiming to be —
 # supporting a new runner is a data change, not a code change.
 @dataclass(frozen=True)
 class Profile:
@@ -153,6 +155,16 @@ class Profile:
     # Runner-specific variables a hook command may be written in terms of, which
     # have to come off before the remainder can be resolved against the repo.
     path_vars: list[str] = field(default_factory=list)
+    # placement: the runner's own tool names. Empty means "this profile does not
+    # know", which switches the check off rather than firing it blindly — a
+    # checker guessing at another runner's vocabulary is noise, not measurement.
+    known_tools: list[str] = field(default_factory=list)
+    # placement: the events a hook may register on. Empty, same reasoning.
+    hook_events: list[str] = field(default_factory=list)
+    # placement: the frontmatter key carrying a scoped rule's glob. Empty for
+    # every runner shipped here, where scope is directory placement instead; the
+    # field exists so a runner that declares scope in frontmatter lands as data.
+    scope_key: str = ""
 
     @property
     def inert_dimensions(self) -> list[str]:
@@ -180,7 +192,7 @@ PROFILES: dict[str, Profile] = {
             "memory": ["CLAUDE.md", "*/CLAUDE.md", "**/CLAUDE.md", "AGENTS.md"],
             "commands": [".claude/commands/**/*.md"],
             "agents": [".claude/agents/**/*.md"],
-            "skills": [".claude/skills/*/SKILL.md"],
+            "skills": [".claude/skills/**/SKILL.md"],
             "settings": [".claude/settings.json"],
             "exclude": ["**/node_modules/**", "**/.git/**", "**/vendor/**"],
         },
@@ -196,6 +208,35 @@ PROFILES: dict[str, Profile] = {
         hooks_root_key="hooks",
         allowlist_path=["permissions", "allow"],
         path_vars=["$CLAUDE_PROJECT_DIR/"],
+        known_tools=[
+            "Bash",
+            "BashOutput",
+            "Edit",
+            "ExitPlanMode",
+            "Glob",
+            "Grep",
+            "KillShell",
+            "MultiEdit",
+            "NotebookEdit",
+            "Read",
+            "SlashCommand",
+            "Task",
+            "TodoWrite",
+            "WebFetch",
+            "WebSearch",
+            "Write",
+        ],
+        hook_events=[
+            "Notification",
+            "PostToolUse",
+            "PreCompact",
+            "PreToolUse",
+            "SessionEnd",
+            "SessionStart",
+            "Stop",
+            "SubagentStop",
+            "UserPromptSubmit",
+        ],
     ),
     "agents-md": Profile(
         name="agents-md",
@@ -236,7 +277,7 @@ def detect_profile(root: Path) -> Profile:
     Autodetection is ordered and total, so it costs nothing in determinism: the
     profile is a function of the tree, exactly like the findings are. What it
     buys is that a repo which is not on Claude Code gets an honest answer instead
-    of six dimensions silently measuring globs that match nothing.
+    of seven dimensions silently measuring globs that match nothing.
     """
     for profile in PROFILES.values():
         if any((root / marker).exists() for marker in profile.detect):
@@ -260,6 +301,9 @@ def _profile_overlay(p: Profile) -> dict[str, Any]:
             "hooks_command_key": p.hooks_command_key,
             "allowlist_path": list(p.allowlist_path),
             "path_vars": list(p.path_vars),
+            "known_tools": list(p.known_tools),
+            "hook_events": list(p.hook_events),
+            "scope_key": p.scope_key,
         },
     }
 
@@ -331,6 +375,22 @@ DEFAULTS: dict[str, Any] = {
         # (Windows checkouts, core.fileMode=false, zip exports) instead of
         # reporting every hook as broken. "on" and "off" force the question.
         "exec_bit_check": "auto",
+    },
+    "placement": {
+        # Consecutive numbered steps in the always-loaded file. Past this it is
+        # a procedure, and a procedure paid for on every turn is read closely on
+        # none — it belongs in a skill, where invocation is what costs.
+        "max_memory_steps": 6,
+        # An agent body this long stopped being a bounded task and became a
+        # procedure being run as one. That is a skill.
+        "max_agent_tokens": 1500,
+        # Tool names this project has that the profile cannot know about —
+        # plugin-provided tools, mostly. The escape hatch for
+        # placement/agent-tool-unknown, so a real grant is never called a typo.
+        "extra_tools": [],
+        # What counts as an instruction file rather than as content, when asking
+        # whether a scoped rule governs anything at all.
+        "instruction_file_names": ["AGENTS.md", "CLAUDE.md"],
     },
     "runner": {},  # filled in by the profile; see _profile_overlay
     "severities": {},  # rule id -> severity override
@@ -1317,6 +1377,290 @@ def _exec_bit_is_meaningful() -> bool:
     return os.name == "posix"
 
 
+# ── dimension: placement ──────────────────────────────────────────────────
+# Markdown structure only. Every trigger below is an ordered-list item, a
+# heading, a filesystem fact or a key lookup — never a phrase in prose, because
+# a rule that has to read intent is a rule that guesses, and this file does not.
+_ORDERED_ITEM = re.compile(r"^ {0,3}\d+[.)]\s+\S")
+_STEP_HEADING = re.compile(r"^#+\s*step\b", re.I)
+
+
+def _longest_step_run(body: str) -> int:
+    """The longest run of consecutive ordered-list items in a body.
+
+    Blank and indented lines continue a run rather than ending it — a list whose
+    items carry a second paragraph is still one list, and splitting it into
+    several short runs would let a twelve-step procedure pass as six two-step
+    ones. Called on `strip_code` output, so a numbered list inside a fenced
+    example never counts: showing a procedure is not stating one.
+    """
+    longest = run = 0
+    for line in body.splitlines():
+        if _ORDERED_ITEM.match(line):
+            run += 1
+            longest = max(longest, run)
+        elif not line.strip() or line[:1] in (" ", "\t"):
+            continue
+        else:
+            run = 0
+    return longest
+
+
+def _governs_something(directory: Path, instruction_names: set[str]) -> bool:
+    """Whether a directory holds anything a rule placed in it could govern.
+
+    Deliberately generous: a subdirectory counts, because scope is a subtree and
+    a rule over `docs/` is not dead just because every file sits one level down.
+    What it takes to fail is a directory holding instruction files and nothing
+    else — a rule with nothing under it, which is a rule that stopped applying
+    without anything saying so.
+    """
+    try:
+        entries = sorted(directory.iterdir(), key=lambda e: e.name)
+    except OSError:
+        return True  # unreadable is unknown, and unknown is not a finding
+    for entry in entries:
+        if entry.name.startswith("."):
+            continue
+        if entry.is_dir():
+            return True
+        if entry.name not in instruction_names:
+            return True
+    return False
+
+
+def check_placement(h: Harness) -> list[Finding]:
+    """Is each piece of guidance living in the primitive whose job it is?
+
+    Five primitives, and each has one job:
+
+      instructions file  The handful of facts true for EVERY task — build
+                         command, test command, the one architectural rule
+                         everyone gets wrong. It is paid for on every turn, so
+                         length is the whole cost.
+      scoped rules       Conventions for part of the tree, loaded on contact.
+                         This is how the always-loaded file stays small without
+                         losing the guidance.
+      skills             A procedure with steps, invoked when a kind of task
+                         comes up. Invocation is what it costs.
+      subagents          A bounded task whose exploration is large and whose
+                         answer is small. The isolation is the point.
+      hooks              Anything that MUST happen, or must not.
+
+    Misplacement is the same fail-open shape as the rest of this tool. A
+    procedure in the instructions file is paid for on every turn and read
+    closely on none. A skill that is really a rule applies only when someone
+    thinks to invoke it. A scoped file over a directory that no longer holds
+    anything is a rule that silently stopped applying. A hook on a misspelled
+    event never fires and never says so.
+
+    Hard-mechanical only: markdown structure, a filesystem fact, or a key
+    lookup. Three attractive rules do not clear that bar and are therefore not
+    here — an obligation stated in prose that no hook enforces, a subagent with
+    no return contract, and a rule in the root file that ought to be scoped.
+    Each needs intent read out of prose. `no-hooks-registered` covers the
+    honest, countable half of the first: this harness enforces nothing.
+
+    Narrower than coherence on purpose. Placement asks whether guidance is in
+    the right KIND of file; coherence asks whether two pieces of guidance agree.
+    """
+    cfg = h.config["placement"]
+    runner = h.config["runner"]
+    paths = h.config["paths"]
+    tools_key = runner.get("tools_key", "tools")
+    instruction_names = set(cfg["instruction_file_names"])
+    out: list[Finding] = []
+
+    # ── the project instructions file ─────────────────────────────────────
+    root_memory = [d for d in h.memory if "/" not in d.rel]
+    has_artifacts = bool(h.commands or h.agents or h.skills or h.settings_path)
+    if has_artifacts and not root_memory:
+        out.append(
+            Finding(
+                "placement",
+                "placement/no-instruction-file",
+                ERROR,
+                ".",
+                "harness artifacts exist but no root instruction file does — "
+                "commands, agents and hooks are steering a runner that was given "
+                "no baseline to steer from",
+            )
+        )
+
+    max_steps = int(cfg["max_memory_steps"])
+    for doc in root_memory:
+        steps = _longest_step_run(strip_code(doc.body))
+        if steps >= max_steps:
+            out.append(
+                Finding(
+                    "placement",
+                    "placement/procedure-in-memory",
+                    WARN,
+                    doc.rel,
+                    f"{steps} consecutive numbered steps in the always-loaded file — "
+                    "a procedure belongs in a skill, where it is paid for on "
+                    "invocation instead of on every turn",
+                )
+            )
+
+    # ── scoped rules ──────────────────────────────────────────────────────
+    scope_key = runner.get("scope_key", "")
+    for doc in h.memory:
+        if doc.rel.count("/") > 0 and not _governs_something(doc.path.parent, instruction_names):
+            out.append(
+                Finding(
+                    "placement",
+                    "placement/scope-matches-nothing",
+                    ERROR,
+                    doc.rel,
+                    "scoped instructions over a directory holding nothing else — "
+                    "the rule governs no file, and a rule that stopped applying "
+                    "does not announce it",
+                )
+            )
+        if scope_key and scope_key not in doc.frontmatter:
+            out.append(
+                Finding(
+                    "placement",
+                    "placement/scope-not-declared",
+                    WARN,
+                    doc.rel,
+                    f"no `{scope_key}:` in frontmatter — under this runner scope is "
+                    "declared, not inferred from where the file sits, so an "
+                    "undeclared rule applies somewhere nobody chose",
+                )
+            )
+
+    # ── skills ────────────────────────────────────────────────────────────
+    for doc in h.skills:
+        body = strip_code(doc.body)
+        lines = body.splitlines()
+        has_steps = any(_ORDERED_ITEM.match(ln) for ln in lines) or any(
+            _STEP_HEADING.match(ln) for ln in lines
+        )
+        if not has_steps:
+            out.append(
+                Finding(
+                    "placement",
+                    "placement/skill-without-steps",
+                    WARN,
+                    doc.rel,
+                    "skill states no steps — a skill that is not a procedure is a "
+                    "rule wearing a skill's clothes, and a rule that applies only "
+                    "when invoked mostly does not apply",
+                )
+            )
+
+    # ── subagents ─────────────────────────────────────────────────────────
+    known_tools = set(runner.get("known_tools", [])) | set(cfg["extra_tools"])
+    max_agent_tokens = int(cfg["max_agent_tokens"])
+    chars_per_token = h.config["budget"]["chars_per_token"]
+    for doc in h.agents:
+        if known_tools:
+            granted = [t.strip() for t in doc.frontmatter.get(tools_key, "").split(",")]
+            unknown = sorted({t for t in granted if t and "__" not in t and t not in known_tools})
+            for tool in unknown:
+                out.append(
+                    Finding(
+                        "placement",
+                        "placement/agent-tool-unknown",
+                        ERROR,
+                        doc.rel,
+                        f"grants `{tool}`, which this runner has no such tool for — "
+                        "an unrecognised name is accepted silently, so the agent "
+                        "holds less than it says and still reports success",
+                    )
+                )
+        cost = estimate_tokens(doc.body, chars_per_token)
+        if cost > max_agent_tokens:
+            out.append(
+                Finding(
+                    "placement",
+                    "placement/agent-body-oversized",
+                    WARN,
+                    doc.rel,
+                    f"agent body is ~{cost} tokens against a budget of "
+                    f"{max_agent_tokens} — at that length it is a procedure being "
+                    "run as a task, and a procedure is a skill",
+                )
+            )
+
+    # ── hooks ─────────────────────────────────────────────────────────────
+    hooks_root_key = runner.get("hooks_root_key", "")
+    hook_events = set(runner.get("hook_events", []))
+    if hooks_root_key and isinstance(h.settings, dict):
+        registered = h.settings.get(hooks_root_key) or {}
+        if isinstance(registered, dict):
+            if hook_events:
+                for event in sorted(k for k in registered if isinstance(k, str)):
+                    if event not in hook_events:
+                        out.append(
+                            Finding(
+                                "placement",
+                                "placement/hook-unknown-event",
+                                ERROR,
+                                h.settings_rel,
+                                f"`{event}` is not an event this runner fires — the "
+                                "hook is registered, never runs, and reports nothing",
+                            )
+                        )
+            if not _registered_hooks_count(h):
+                out.append(
+                    Finding(
+                        "placement",
+                        "placement/no-hooks-registered",
+                        INFO,
+                        h.settings_rel,
+                        "no hooks are registered, so every rule in this harness is "
+                        "advisory — nothing here is enforced, and prose is not a gate",
+                    )
+                )
+
+    # ── honesty about coverage ────────────────────────────────────────────
+    missing = []
+    if not paths.get("skills"):
+        missing.append("skills")
+    if not paths.get("agents"):
+        missing.append("subagents")
+    if not hooks_root_key or not paths.get("settings"):
+        missing.append("hooks")
+    if missing:
+        out.append(
+            Finding(
+                "placement",
+                "placement/primitives-unavailable",
+                INFO,
+                ".",
+                f"profile {h.profile} has no concept of {', '.join(missing)}, so "
+                "guidance can only be misplaced among the primitives it does have — "
+                "a short placement report here is partial measurement, not a clean bill",
+            )
+        )
+    return out
+
+
+def _registered_hooks_count(h: Harness) -> int:
+    """How many hook commands the settings file actually registers.
+
+    Counts entries rather than resolving them, because `_registered_hooks`
+    deliberately drops inline one-liners — and an inline one-liner is still an
+    enforced gate. The question here is whether anything is enforced at all.
+    """
+    runner = h.config["runner"]
+    root_key = runner.get("hooks_root_key", "")
+    if not h.settings or not root_key:
+        return 0
+    entry_key = runner.get("hooks_entry_key", "hooks")
+    total = 0
+    for entries in (h.settings.get(root_key) or {}).values():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict):
+                total += len(entry.get(entry_key) or [])
+    return total
+
+
 DIMENSIONS: dict[str, Callable[[Harness], list[Finding]]] = {
     "budget": check_budget,
     "redundancy": check_redundancy,
@@ -1324,6 +1668,7 @@ DIMENSIONS: dict[str, Callable[[Harness], list[Finding]]] = {
     "completeness": check_completeness,
     "authority": check_authority,
     "executability": check_executability,
+    "placement": check_placement,
 }
 
 
@@ -1331,7 +1676,7 @@ DIMENSIONS: dict[str, Callable[[Harness], list[Finding]]] = {
 def load_project_rules(h: Harness) -> list[Finding]:
     """Run `.harnesslint/rules/*.py`, each exposing `check(harness) -> list`.
 
-    The six dimensions are what generalises. Every harness also has assertions
+    The seven dimensions are what generalises. Every harness also has assertions
     only it can make — a board id that must not be pasted, a service that must
     always be pinned. Those belong here rather than upstream, and they are the
     reason this stays useful as a project's conventions accumulate.
@@ -1549,6 +1894,18 @@ _SAMPLE_CONFIG = """\
 # surprise found halfway through a task.
 declared_clis = []
 
+# [placement]
+# Is each piece of guidance in the primitive whose job it is? See
+# .harnesslint/PRIMITIVES.md for the taxonomy these numbers are measuring.
+#
+# Consecutive numbered steps allowed in the always-loaded file before it is
+# calling itself a procedure. A procedure belongs in a skill.
+# max_memory_steps = 6
+#
+# Tool names your runner has that the profile cannot know about — plugin tools,
+# mostly. Without this a real grant reads as a typo, which is worse than silence.
+# extra_tools = []
+
 # [severities]
 # "redundancy/duplicate-rule" = "info"
 
@@ -1560,7 +1917,7 @@ declared_clis = []
 _SAMPLE_RULE = '''\
 """An example project rule. Delete it, or make it yours.
 
-The six built-in dimensions are what generalises across harnesses. Assertions
+The seven built-in dimensions are what generalises across harnesses. Assertions
 only THIS project can make belong here — a magic id that must never be pasted,
 a service flag that must always be present, a convention your team agreed on
 and keeps half-forgetting.
@@ -1592,6 +1949,146 @@ def check(h: Harness) -> list[Finding]:
     return out
 '''
 
+_PRIMITIVES_DOC = """\
+# Five primitives, five jobs
+
+An agent harness is not one thing, it is five, and each has a job. Guidance put
+in the wrong one still reads correctly to a person and quietly does the wrong
+thing to the agent — which is the shape every dimension in this tool is aimed
+at. The `placement` dimension checks this mechanically; the taxonomy below is
+the part worth remembering.
+
+**Project instructions file** — the handful of facts true for EVERY task. Build
+command, test command, the house conventions nothing enforces, the one
+architectural rule everyone gets wrong. Short, because it is paid for on every
+turn and a long one is read closely on none.
+
+**Scoped rules** — conventions that apply to part of the tree, loaded on
+contact. This is how the always-loaded file stays small without losing the
+guidance, and it is the main lever you have on always-loaded cost.
+
+**Skills** — a procedure with steps, invoked when a kind of task comes up.
+Invocation is what a skill costs, so length is cheap here and expensive in the
+instructions file. That is the whole reason procedures belong here.
+
+**Subagents** — a bounded task whose exploration is large and whose answer is
+small. The isolation is the point; if the body has grown into a procedure, it
+wanted to be a skill.
+
+**Hooks** — anything that MUST happen, or must not. Prose is advice. A hook is
+the only primitive here that is a gate, and a harness with none enforces
+nothing, however firmly it is worded.
+
+## Which rule speaks to each
+
+Instructions file
+
+- `placement/no-instruction-file` — commands, agents or hooks exist with no
+  root instruction file to steer from.
+- `placement/procedure-in-memory` — a long run of numbered steps in the
+  always-loaded file. That is a skill.
+
+Scoped rules
+
+- `placement/scope-matches-nothing` — a scoped file over a directory holding
+  nothing else. The rule governs no file and does not say so.
+- `placement/scope-not-declared` — a runner where scope is declared in
+  frontmatter, and this file declares none.
+
+Skills
+
+- `placement/skill-without-steps` — a skill with no steps is a rule wearing a
+  skill's clothes, and a rule that applies only when invoked mostly does not.
+
+Subagents
+
+- `placement/agent-tool-unknown` — a name the runner has no such tool for. It
+  is accepted silently, so the agent holds less than it says.
+- `placement/agent-body-oversized` — an agent body long enough to be a
+  procedure. A procedure is a skill.
+
+Hooks
+
+- `placement/hook-unknown-event` — a hook on an event the runner never fires.
+  It never runs and never reports that it did not.
+- `placement/no-hooks-registered` — nothing is enforced anywhere. A fact rather
+  than a failure, which is why it is INFO.
+
+Coverage
+
+- `placement/primitives-unavailable` — the active profile has no concept of
+  some of these, so a short report here is partial measurement, not a clean
+  bill of health.
+
+Three rules are deliberately absent, and the omissions are the design. An
+obligation stated in prose that no hook enforces, a subagent with no return
+contract, and a rule in the root file that ought to be scoped all require
+reading intent out of prose. A checker that guesses is one people learn to
+ignore, so those stay unshipped until there is a mechanical signal for them.
+
+Run `harnesslint explain placement` for the same taxonomy from the tool.
+"""
+
+
+_STUB_MEMORY = """\
+# Project instructions
+
+Everything here is loaded on EVERY turn, so it holds only what is true for every
+task. A procedure with steps belongs in a skill; a convention that applies to
+one directory belongs in an instruction file inside that directory.
+
+## Commands
+
+- Build: `<fill this in>`
+- Test: `<fill this in>`
+
+## Conventions
+
+- The one architectural rule people get wrong here: `<fill this in>`
+"""
+
+_STUB_SKILL = """\
+---
+name: example
+description: Replace this with when to invoke the skill, not what it contains.
+---
+
+# Example skill
+
+A skill is a procedure. Its body is paid for on invocation rather than on every
+turn, which is what makes it the right home for steps.
+
+1. State the precondition this procedure assumes.
+2. Do the first thing.
+3. Do the second thing.
+4. Say what done looks like, so the agent can tell when it is.
+"""
+
+_STUB_SCOPED = """\
+# Instructions for this directory
+
+Loaded when the agent touches a file here, and not otherwise. This is how the
+always-loaded file stays short without losing the guidance.
+
+- A convention that is true here and nowhere else: `<fill this in>`
+"""
+
+_STUB_SETTINGS = {
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "echo 'replace this with the gate you actually want'",
+                    }
+                ],
+            }
+        ]
+    }
+}
+
 _CI_SNIPPET = """
 Add this job to your CI. `--format github` emits ::error / ::warning
 annotations, so a finding is clickable on the PR diff rather than buried in
@@ -1614,27 +2111,86 @@ mess you already have:
 """
 
 
-def init(root: Path) -> int:
+def _scaffold_dir(root: Path, exclude: Iterable[str]) -> Path | None:
+    """A top-level directory a scoped rule would actually govern, or None.
+
+    The scaffold refuses to write a scoped rule into an empty tree, because a
+    rule that governs no file is exactly what `placement/scope-matches-nothing`
+    exists to report — a scaffold that fails its own dimension teaches the wrong
+    thing on the first run. Picking the first candidate in sorted order keeps a
+    second `init` on the same tree writing to the same place.
+    """
+    skip = {f".{TOOL_NAME}", "node_modules", "vendor", "__pycache__"}
+    for entry in sorted(root.iterdir(), key=lambda e: e.name):
+        if not entry.is_dir() or entry.name.startswith(".") or entry.name in skip:
+            continue
+        if any(fnmatch.fnmatch(entry.name, ex) for ex in exclude):
+            continue
+        if any(child.is_file() for child in entry.rglob("*")):
+            return entry
+    return None
+
+
+def init(root: Path, scaffold: bool = False) -> int:
     """Scaffold a config and a rules directory, then print the CI snippet.
 
     Everything it writes is optional — the tool runs on defaults with no config
     at all. This exists because the first question in a new repo is always
     "where do I put things", and answering that in a file beats answering it in
     a README nobody opens. It never overwrites: re-running is safe.
+
+    `--scaffold` additionally stubs out the primitives themselves. It is opt-in
+    because writing into someone's runner directory uninvited is not a linter's
+    business — everything without the flag stays under `.{TOOL_NAME}/`, which
+    this tool owns.
     """
     config = root / f"{TOOL_NAME}.toml"
-    rules_dir = root / f".{TOOL_NAME}" / "rules"
+    tool_dir = root / f".{TOOL_NAME}"
+    rules_dir = tool_dir / "rules"
     made: list[str] = []
 
-    if not config.exists():
-        config.write_text(_SAMPLE_CONFIG, encoding="utf-8")
-        made.append(config.name)
-    if not rules_dir.exists():
-        rules_dir.mkdir(parents=True)
-        (rules_dir / "example.py").write_text(_SAMPLE_RULE, encoding="utf-8")
-        made.append(f".{TOOL_NAME}/rules/example.py")
+    def write(path: Path, text: str) -> None:
+        if path.exists():
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        made.append(path.relative_to(root).as_posix())
+
+    write(config, _SAMPLE_CONFIG)
+    write(rules_dir / "example.py", _SAMPLE_RULE)
+    # Always: the taxonomy the placement dimension measures against. Under
+    # .harnesslint/, so it costs nothing on a turn and touches nothing the
+    # runner owns.
+    write(tool_dir / "PRIMITIVES.md", _PRIMITIVES_DOC)
+
+    note = ""
+    if scaffold:
+        # Detection runs against the tree as it is now, which for an empty one
+        # answers "generic" — there is no runner to detect yet. Scaffolding is
+        # the act of choosing a layout, so an undetected tree gets the runner
+        # this profile set knows best rather than nothing at all. A tree that
+        # HAS a runner keeps it, so `agents-md` gets instruction files only.
+        profile = detect_profile(root)
+        if profile.name == FALLBACK_PROFILE:
+            profile = PROFILES["claude-code"]
+        write(root / "CLAUDE.md", _STUB_MEMORY)
+        if profile.paths.get("skills"):
+            write(root / ".claude" / "skills" / "example" / "SKILL.md", _STUB_SKILL)
+        if profile.paths.get("settings"):
+            write(root / ".claude" / "settings.json", json.dumps(_STUB_SETTINGS, indent=2) + "\n")
+        target = _scaffold_dir(root, profile.paths.get("exclude", []))
+        if target is not None:
+            write(target / "CLAUDE.md", _STUB_SCOPED)
+        else:
+            note = (
+                f"{TOOL_NAME}: no directory with files in it, so no scoped rule was "
+                "written — a scoped rule over an empty directory is a dead rule, "
+                "which is what placement/scope-matches-nothing reports"
+            )
 
     print(f"{TOOL_NAME}: wrote {', '.join(made)}" if made else f"{TOOL_NAME}: already set up")
+    if note:
+        print(note)
     print(_CI_SNIPPET)
     return 0
 
@@ -1643,7 +2199,7 @@ def list_profiles(root: Path) -> int:
     """Which runners are known, which one this tree gets, and what each misses.
 
     The last column is the point. A profile with inert dimensions is not doing
-    six things badly, it is doing four things and saying so — and a user who
+    seven things badly, it is doing four things and saying so — and a user who
     cannot see that would read a short report as a clean harness.
     """
     detected = detect_profile(root)
@@ -1655,7 +2211,7 @@ def list_profiles(root: Path) -> int:
         markers = ", ".join(profile.detect) if profile.detect else "(fallback — matches anything)"
         print(f"     detected by: {markers}")
         inert = profile.inert_dimensions
-        print(f"     not measured: {', '.join(inert) if inert else 'nothing — all six apply'}")
+        print(f"     not measured: {', '.join(inert) if inert else 'nothing — all seven apply'}")
         print()
     print(f"* = detected for this tree ({root})")
     print(f'Pin it with `[runner] profile = "..."` in {TOOL_NAME}.toml.')
@@ -1676,6 +2232,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--format", choices=["text", "json", "github"], default="text")
     parser.add_argument(
+        "--scaffold",
+        action="store_true",
+        help="`init` only: also stub out the primitives themselves",
+    )
+    parser.add_argument(
         "--strict",
         action="store_true",
         help="ignore the baseline; any error-severity finding fails",
@@ -1685,7 +2246,7 @@ def main(argv: list[str] | None = None) -> int:
     root = _repo_root(args.root)
 
     if args.command == "init":
-        return init(root)
+        return init(root, scaffold=args.scaffold)
     if args.command == "profiles":
         return list_profiles(root)
 

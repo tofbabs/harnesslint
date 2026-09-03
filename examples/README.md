@@ -18,7 +18,7 @@ rule *is*: the assertions only your repo can make, which have no business being 
 
 **Copy it as a shape, not as content.** What generalises is the pattern — a magic id
 that must never be pasted into a command, a service that must always be pinned, a
-convention your team agreed on and keeps half-forgetting. The six built-in dimensions
+convention your team agreed on and keeps half-forgetting. The seven built-in dimensions
 cover what every harness has in common; this is where everything else goes.
 
 The contract is one function:

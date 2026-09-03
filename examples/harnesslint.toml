@@ -79,6 +79,28 @@ declared_clis = ["gh", "kubectl"]
 # every hook as broken. "on" and "off" force the question.
 # exec_bit_check = "auto"
 
+[placement]
+# How long a run of consecutive ordered-list items in root memory has to be
+# before it reads as a procedure rather than a fact sheet. A procedure belongs
+# in a skill, where it is paid for on invocation instead of on every turn.
+# max_memory_steps = 6
+
+# Estimated tokens (chars/4, same approximation as [budget]) past which a
+# subagent's body is a procedure being run as a task, not a bounded task with
+# a small answer. Raise it if your subagents genuinely need the room.
+# max_agent_tokens = 1500
+
+# Tool names `placement/agent-tool-unknown` should accept beyond the profile's
+# own `known_tools` — plugin-provided tools the profile cannot know about.
+# Leave it empty and the rule stays exact; only add what you actually grant.
+# extra_tools = []
+
+# What counts as "an instruction file, not content" when
+# `placement/scope-matches-nothing` decides whether a scoped directory
+# actually governs anything. Override if your instruction files go by a
+# name other than these two.
+# instruction_file_names = ["CLAUDE.md", "AGENTS.md"]
+
 [severities]
 # Promote or demote a rule. Demote when a rule genuinely does not apply to your
 # repo; promote when a finding is worse for you than the default assumes.
