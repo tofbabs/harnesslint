@@ -1518,6 +1518,11 @@ def check_placement(h: Harness) -> list[Finding]:
                     "does not announce it",
                 )
             )
+        # Every memory doc, root file included — not only the scoped ones. Under
+        # a runner that declares scope in frontmatter, position on disk means
+        # nothing, so "it is at the root, therefore it is global" is an
+        # inference this checker has no grounds to make. Inert until such a
+        # profile ships, at which point that profile's author decides.
         if scope_key and scope_key not in doc.frontmatter:
             out.append(
                 Finding(
